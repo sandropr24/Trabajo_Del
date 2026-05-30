@@ -1,124 +1,96 @@
 <?php
 
-/*
---------------------------------------------------
-MODELO VENTA
---------------------------------------------------
-Este modelo maneja toda la lógica relacionada a:
-- ventas
-- detalles de venta
-- control de stock (kardex)
-- listado de productos para vender
-*/
-
 class Venta
 {
 
-    /*
-    --------------------------------------------------
-    OBTENER STOCK ACTUAL
-    --------------------------------------------------
-    Obtiene el último stock registrado de un producto
-    */
-    public static function obtenerStock($conexion, $id_producto)
+    public static function obtenerStock($conexion, $id_producto, $id_almacen)
     {
-
-        $query = mysqli_query($conexion, "
-            SELECT saldo_total 
-            FROM tb_kardex 
-            WHERE id_producto = $id_producto 
-            ORDER BY id_kardex DESC 
-            LIMIT 1
-        ");
-
-        $row = mysqli_fetch_assoc($query);
-
+        $stmt = mysqli_prepare($conexion, "
+        SELECT saldo_total 
+        FROM tb_kardex 
+        WHERE id_producto = ? 
+        AND id_almacen = ?
+        ORDER BY id_kardex DESC 
+        LIMIT 1
+    ");
+        mysqli_stmt_bind_param($stmt, "ii", $id_producto, $id_almacen);
+        mysqli_stmt_execute($stmt);
+        $result = mysqli_stmt_get_result($stmt);
+        $row = mysqli_fetch_assoc($result);
         return $row ? $row['saldo_total'] : 0;
     }
 
-
-    /*
-    --------------------------------------------------
-    INSERTAR VENTA
-    --------------------------------------------------
-    Registra la venta principal en la tabla tb_ventas
-    */
     public static function insertarVenta($conexion, $titulo, $total)
     {
-
-        mysqli_query($conexion, "
+        $stmt = mysqli_prepare($conexion, "
             INSERT INTO tb_ventas (fecha, titulo, total, iduser_create)
-            VALUES (NOW(), '$titulo', $total, 1)
+            VALUES (NOW(), ?, ?, 1)
         ");
-
+        mysqli_stmt_bind_param($stmt, "sd", $titulo, $total);
+        mysqli_stmt_execute($stmt);
         return mysqli_insert_id($conexion);
     }
 
-
-    /*
-    --------------------------------------------------
-    INSERTAR DETALLE DE VENTA
-    --------------------------------------------------
-    Registra los productos incluidos en la venta
-    */
     public static function insertarDetalle($conexion, $id_venta, $id_producto, $cantidad, $precio)
     {
-
         $subtotal = $cantidad * $precio;
-
-        return mysqli_query($conexion, "
+        $stmt = mysqli_prepare($conexion, "
             INSERT INTO tb_detalle_venta 
             (id_venta, id_producto, cantidad, precio_unitario, subtotal, precio_final, iduser_create)
-            VALUES 
-            ($id_venta, $id_producto, $cantidad, $precio, $subtotal, $subtotal, 1)
+            VALUES (?, ?, ?, ?, ?, ?, 1)
         ");
+        mysqli_stmt_bind_param($stmt, "iiiddd", $id_venta, $id_producto, $cantidad, $precio, $subtotal, $subtotal);
+        return mysqli_stmt_execute($stmt);
     }
 
-
-    /*
-    --------------------------------------------------
-    REGISTRAR SALIDA EN KARDEX
-    --------------------------------------------------
-    Descuenta el stock cuando se realiza una venta
-    */
-    public static function salidaKardex($conexion, $id_producto, $cantidad, $precio)
+    public static function salidaKardex($conexion, $id_producto, $id_almacen, $cantidad, $precio)
     {
-
-        mysqli_query($conexion, "
-            CALL sp_salida($id_producto, 1, $cantidad, $precio)
-        ");
-
-        // Limpia resultados del procedimiento almacenado
+        $stmt = mysqli_prepare($conexion, "CALL sp_salida(?, ?, ?, ?)");
+        mysqli_stmt_bind_param($stmt, "iiid", $id_producto, $id_almacen, $cantidad, $precio);
+        mysqli_stmt_execute($stmt);
         while (mysqli_more_results($conexion)) {
             mysqli_next_result($conexion);
         }
     }
 
-
-    /*
-    --------------------------------------------------
-    LISTAR PRODUCTOS PARA VENTAS
-    --------------------------------------------------
-    Muestra productos disponibles con stock
-    */
-    public static function listarProductos($conexion, $limit, $offset)
-    {
-
+    public static function listarProductos(
+        $conexion,
+        $id_almacen,
+        $limit,
+        $offset
+    ) {
         $productos = [];
 
-        $query = mysqli_query($conexion, "
-            SELECT p.id_producto, p.modelo, p.precio_actual, p.imagen,
-            COALESCE(k.saldo_total, 0) as stock
-            FROM tb_productos p
-            LEFT JOIN tb_kardex k 
-                ON k.id_kardex = (
-                    SELECT MAX(id_kardex) 
-                    FROM tb_kardex 
-                    WHERE id_producto = p.id_producto
-                )
-            WHERE p.inactive_at IS NULL
-            LIMIT $limit OFFSET $offset
-        ");
+        $stmt = mysqli_prepare($conexion, "
+        SELECT
+            p.id_producto,
+            p.modelo,
+            p.precio_actual,
+            p.imagen,
+            COALESCE(k.saldo_total,0) AS stock
+        FROM tb_productos p
+        LEFT JOIN tb_kardex k
+            ON k.id_kardex = (
+                SELECT MAX(id_kardex)
+                FROM tb_kardex
+                WHERE id_producto = p.id_producto
+                AND id_almacen = ?
+            )
+        WHERE p.inactive_at IS NULL
+        LIMIT ? OFFSET ?
+    ");
+
+        mysqli_stmt_bind_param(
+            $stmt,
+            "iii",
+            $id_almacen,
+            $limit,
+            $offset
+        );
+
+        mysqli_stmt_execute($stmt);
+
+        $query = mysqli_stmt_get_result($stmt);
 
         while ($row = mysqli_fetch_assoc($query)) {
             $productos[] = $row;
@@ -127,24 +99,13 @@ class Venta
         return $productos;
     }
 
-
-    /*
-    --------------------------------------------------
-    CONTAR PRODUCTOS
-    --------------------------------------------------
-    Devuelve el total de productos activos
-    (para paginación)
-    */
     public static function contarProductos($conexion)
     {
-
         $query = mysqli_query($conexion, "
             SELECT COUNT(*) as total 
             FROM tb_productos 
             WHERE inactive_at IS NULL
         ");
-
         return mysqli_fetch_assoc($query)['total'];
     }
 }
-?>
