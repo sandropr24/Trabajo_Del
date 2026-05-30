@@ -1,23 +1,22 @@
 <?php
 
-// Conexión a la base de datos
-include("conexion.php");
+include(__DIR__ . "/conexion.php");
 
-// Desactiva reportes de errores de MySQLi (manejo manual de errores)
-mysqli_report(MYSQLI_REPORT_OFF);
+require_once __DIR__ . "/../helpers/auth.php";
+iniciarSesion();
 
-// Captura la acción enviada por GET (si no existe, queda vacío)
 $action = $action ?? $_GET['action'] ?? '';
+requerirPermisosPHP('historial', $action);
+
+mysqli_report(MYSQLI_REPORT_OFF);
 
 
 /*
 --------------------------------------------------
 LISTAR VENTAS
 --------------------------------------------------
-Obtiene todas las ventas registradas en la base de datos
-ordenadas de forma descendente (última venta primero)
 */
-if($action == 'listar'){
+if ($action == 'listar') {
 
     $ventas = [];
 
@@ -27,12 +26,10 @@ if($action == 'listar'){
         ORDER BY id_venta DESC
     ");
 
-    // Recorre los resultados y los guarda en un array
-    while($row = mysqli_fetch_assoc($query)){
+    while ($row = mysqli_fetch_assoc($query)) {
         $ventas[] = $row;
     }
 
-    // Retorna el listado de ventas
     return $ventas;
 
 
@@ -40,20 +37,16 @@ if($action == 'listar'){
 --------------------------------------------------
 DETALLE DE VENTA
 --------------------------------------------------
-Obtiene el detalle de una venta específica
-incluyendo producto, cantidad, precio y subtotal
 */
-}else if($action == 'detalle'){
+} else if ($action == 'detalle') {
 
-    // ID de la venta seleccionada
-    $id_venta = $_GET['id_venta'];
+    $id_venta = (int)$_GET['id_venta'];
 
-    // Respuesta en formato JSON para uso con JavaScript
     header('Content-Type: application/json');
 
     $detalle = [];
 
-    $query = mysqli_query($conexion, "
+    $stmt = mysqli_prepare($conexion, "
         SELECT 
             d.cantidad, 
             d.precio_unitario, 
@@ -62,18 +55,17 @@ incluyendo producto, cantidad, precio y subtotal
         FROM tb_detalle_venta d 
         INNER JOIN tb_productos p 
             ON d.id_producto = p.id_producto 
-        WHERE d.id_venta = $id_venta
+        WHERE d.id_venta = ?
     ");
+    mysqli_stmt_bind_param($stmt, "i", $id_venta);
+    mysqli_stmt_execute($stmt);
+    $result = mysqli_stmt_get_result($stmt);
 
-    // Guardar cada fila en el array de detalle
-    while($row = mysqli_fetch_assoc($query)){
+    while ($row = mysqli_fetch_assoc($result)) {
         $detalle[] = $row;
     }
 
-    // Retornar el detalle en formato JSON
     echo json_encode($detalle);
     exit;
 
 }
-
-?>

@@ -1,158 +1,181 @@
 <?php
 
-// Conexión a la base de datos
-include("conexion.php");
-
-// Importación del modelo Venta (lógica de negocio)
+include(__DIR__ . "/conexion.php");
 require_once __DIR__ . "/../models/Venta.php";
+require_once __DIR__ . "/../helpers/validacion.php";
 
-// Desactiva reportes automáticos de errores MySQLi
+require_once __DIR__ . "/../helpers/auth.php";
+iniciarSesion();
+
+$action = $action ?? $_GET['action'] ?? '';
+requerirPermisosPHP('ventas', $action);   
+
 mysqli_report(MYSQLI_REPORT_OFF);
 
-// Captura la acción enviada por GET
-$action = $action ?? $_GET['action'] ?? '';
 
-/*
---------------------------------------------------
-VENTA SIMPLE (1 PRODUCTO)
---------------------------------------------------
-Registra una venta de un solo producto
-*/
-if($action == 'vender'){
+if ($action == 'vender') {
 
-    // Datos del formulario
-    $id_producto = $_POST['id_producto'];
-    $precio = $_POST['precio'];
-    $modelo = $_POST['modelo'];
+    $id_producto = validarEntero($_POST['id_producto'], "Producto");
+    $precio      = validarNumero($_POST['precio'], "Precio", 0.01);
+    $modelo      = validarTexto($_POST['modelo'], "Modelo");
+    $id_almacen  = validarEntero($_POST['id_almacen'], "Almacén");
 
-    // Verificar stock actual del producto
-    $stock_actual = Venta::obtenerStock($conexion, $id_producto);
+    $stock_actual = Venta::obtenerStock($conexion, $id_producto, $id_almacen);
 
-    // Validación de stock
-    if($stock_actual < 1){
-        header("Location: ../index.php?vista=ventas&msg=error");
+    if ($stock_actual < 1) {
+        header("Location: /index.php?vista=ventas&msg=error");
         exit;
     }
 
-    // Crear título de la venta
-    $titulo = "Venta: $modelo (x1)";
+    mysqli_begin_transaction($conexion);
 
-    // Insertar venta principal
-    $id_venta = Venta::insertarVenta($conexion, $titulo, $precio);
+    try {
 
-    // Insertar detalle de la venta
-    Venta::insertarDetalle($conexion, $id_venta, $id_producto, 1, $precio);
+        $titulo = "Venta: $modelo (x1)";
+        $id_venta = Venta::insertarVenta($conexion, $titulo, $precio);
 
-    // Registrar salida en el kardex
-    Venta::salidaKardex($conexion, $id_producto, 1, $precio);
+        Venta::insertarDetalle($conexion, $id_venta, $id_producto, 1, $precio);
+        Venta::salidaKardex($conexion, $id_producto, $id_almacen, 1, $precio);
 
-    header("Location: ../index.php?vista=ventas&msg=vendido");
+        mysqli_commit($conexion);
+
+        header("Location: /index.php?vista=ventas&msg=vendido");
+
+    } catch (Exception $e) {
+        mysqli_rollback($conexion);
+        header("Location: /index.php?vista=ventas&msg=error");
+    }
+
     exit;
+}
 
+else if ($action == 'vender_carrito') {
 
-/*
---------------------------------------------------
-VENTA CON CARRITO (MÚLTIPLES PRODUCTOS)
---------------------------------------------------
-Permite vender varios productos en una sola compra
-*/
-}else if($action == 'vender_carrito'){
-
-    // Respuesta en formato JSON
     header('Content-Type: application/json');
 
-    // Obtener carrito enviado desde JavaScript
-    $carrito = json_decode(file_get_contents('php://input'), true);
+    $body = json_decode(file_get_contents('php://input'), true);
+    $carrito = $body['carrito'] ?? [];
 
-    // Validar carrito vacío
-    if(empty($carrito)){
-        echo json_encode(['status' => 'error']);
+    $id_almacen = validarEntero($body['id_almacen'] ?? null, "Almacén");
+
+    if (empty($carrito)) {
+        echo json_encode(['status' => 'error', 'message' => 'Carrito vacío']);
         exit;
     }
 
-    /*
-    --------------------------------------------------
-    VALIDACIÓN DE STOCK
-    --------------------------------------------------
-    Verifica que todos los productos tengan stock suficiente
-    */
-    foreach($carrito as $item){
+    foreach ($carrito as $item) {
 
-        $stock = Venta::obtenerStock($conexion, $item['id']);
+        $id_producto = validarEntero($item['id'], "Producto");
+        $cantidad    = validarNumero($item['cantidad'], "Cantidad", 1);
 
-        if($item['cantidad'] > $stock){
-            echo json_encode(['status' => 'error']);
+        $stock = Venta::obtenerStock($conexion, $id_producto, $id_almacen);
+
+        if ($cantidad > $stock) {
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'Stock insuficiente para ' . $item['modelo']
+            ]);
             exit;
         }
     }
 
-    $total = 0;
+    mysqli_begin_transaction($conexion);
 
-    // Crear título de venta con todos los productos
-    $titulo_items = array_map(function($item){
-        return $item['modelo'] . " (x" . $item['cantidad'] . ")";
-    }, $carrito);
+    try {
 
-    $titulo = "Venta: " . implode(", ", $titulo_items);
+        $total = 0;
 
-    // Insertar venta principal
-    $id_venta = Venta::insertarVenta($conexion, $titulo, $total);
+        $titulo_items = array_map(function ($item) {
+            return $item['modelo'] . " (x" . $item['cantidad'] . ")";
+        }, $carrito);
 
-    /*
-    --------------------------------------------------
-    REGISTRAR DETALLES Y SALIDA DE STOCK
-    --------------------------------------------------
-    */
-    foreach($carrito as $item){
+        $titulo = "Venta: " . implode(", ", $titulo_items);
 
-        $subt = $item['precio'] * $item['cantidad'];
-        $total += $subt;
+        $id_venta = Venta::insertarVenta($conexion, $titulo, 0);
 
-        // Detalle de venta
-        Venta::insertarDetalle(
-            $conexion,
-            $id_venta,
-            $item['id'],
-            $item['cantidad'],
-            $item['precio']
-        );
+        foreach ($carrito as $item) {
 
-        // Descontar stock en kardex
-        Venta::salidaKardex(
-            $conexion,
-            $item['id'],
-            $item['cantidad'],
-            $item['precio']
-        );
+            $id_producto = validarEntero($item['id'], "Producto");
+            $cantidad    = validarNumero($item['cantidad'], "Cantidad", 1);
+            $precio      = validarNumero($item['precio'], "Precio", 0.01);
+
+            $subtotal = $cantidad * $precio;
+            $total += $subtotal;
+
+            Venta::insertarDetalle(
+                $conexion,
+                $id_venta,
+                $id_producto,
+                $cantidad,
+                $precio
+            );
+
+            Venta::salidaKardex(
+                $conexion,
+                $id_producto,
+                $id_almacen,
+                $cantidad,
+                $precio
+            );
+        }
+
+        $stmt = mysqli_prepare($conexion, "
+            UPDATE tb_ventas 
+            SET total = ? 
+            WHERE id_venta = ?
+        ");
+
+        mysqli_stmt_bind_param($stmt, "di", $total, $id_venta);
+        mysqli_stmt_execute($stmt);
+
+        mysqli_commit($conexion);
+
+        echo json_encode(['status' => 'success']);
+
+    } catch (Exception $e) {
+        mysqli_rollback($conexion);
+
+        echo json_encode([
+            'status' => 'error',
+            'message' => 'Error en la transacción'
+        ]);
     }
 
-    // Actualizar total final de la venta
-    mysqli_query($conexion, "
-        UPDATE tb_ventas SET total = $total WHERE id_venta = $id_venta
-    ");
-
-    echo json_encode(['status' => 'success']);
     exit;
+}
 
-
-/*
---------------------------------------------------
-LISTAR PRODUCTOS PARA VENTAS
---------------------------------------------------
-Muestra productos con paginación para vender
-*/
-}else if($action == 'listar'){
+else if ($action == 'listar') {
 
     $limit = 8;
     $pagina = $_GET['pagina'] ?? 1;
     $offset = ($pagina - 1) * $limit;
 
-    $data = [
-        'productos' => Venta::listarProductos($conexion, $limit, $offset),
-        'total_paginas' => ceil(Venta::contarProductos($conexion) / $limit)
-    ];
+    $id_almacen = validarEntero($_GET['id_almacen'] ?? null, "Almacén");
 
-    return $data;
+    return [
+        'productos' => Venta::listarProductos(
+            $conexion,
+            $id_almacen,
+            $limit,
+            $offset
+        ),
+        'total_paginas' => ceil(
+            Venta::contarProductos($conexion) / $limit
+        )
+    ];
 }
 
-?>
+else if ($action == 'almacenes') {
+
+    $almacenes = [];
+    $query = mysqli_query($conexion, "
+        SELECT id_almacen, nombre_almacen 
+        FROM tb_almacen
+    ");
+
+    while ($row = mysqli_fetch_assoc($query)) {
+        $almacenes[] = $row;
+    }
+
+    return $almacenes;
+}
