@@ -1,15 +1,6 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <title>Historial de Ventas</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-</head>
-<body class="bg-light">
-
 <?php
 $action = 'listar';
-$ventas = include("php/historial.php");
+$ventas = include(__DIR__ . '/../php/historial.php');
 ?>
 
 <div class="container mt-5">
@@ -52,12 +43,12 @@ $ventas = include("php/historial.php");
         <tbody>
           <?php foreach($ventas as $row): ?>
           <tr>
-            <td><?=$row['id_venta']?></td>
-            <td><?=$row['fecha']?></td>
-            <td><?=$row['titulo']?></td>
-            <td>S/. <?=number_format($row['total'], 2)?></td>
+            <td><?= $row['id_venta'] ?></td>
+            <td><?= $row['fecha'] ?></td>
+            <td><?= $row['titulo'] ?></td>
+            <td>S/. <?= number_format($row['total'], 2) ?></td>
             <td>
-              <button class="btn btn-sm btn-primary" onclick="verDetalle(<?=$row['id_venta']?>)">Ver</button>
+              <button class="btn btn-sm btn-primary" onclick="verDetalle(<?= $row['id_venta'] ?>)">Ver</button>
             </td>
           </tr>
           <?php endforeach; ?>
@@ -68,22 +59,4 @@ $ventas = include("php/historial.php");
 
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-<script src="js/apps.js"></script>
-<script>
-async function verDetalle(id_venta){
-    var res = await fetch('php/historial.php?action=detalle&id_venta=' + id_venta);
-    var data = await res.json();
-
-    var html = '<table class="table table-bordered"><thead class="table-primary"><tr><th>Producto</th><th>Cantidad</th><th>Precio Unitario</th><th>Subtotal</th></tr></thead><tbody>';
-    data.forEach(item => {
-        html += '<tr><td>' + item.modelo + '</td><td>' + item.cantidad + '</td><td>S/. ' + parseFloat(item.precio_unitario).toFixed(2) + '</td><td>S/. ' + parseFloat(item.subtotal).toFixed(2) + '</td></tr>';
-    });
-    html += '</tbody></table>';
-
-    document.getElementById('contenido-detalle').innerHTML = html;
-    new bootstrap.Modal(document.getElementById('modalDetalle')).show();
-}
-</script>
-</body>
-</html>
+<script src="js/historial.js"></script>
